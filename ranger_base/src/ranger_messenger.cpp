@@ -396,8 +396,9 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     steer_cmd = CalculateSteeringAngle(*msg, radius);
     // Use minimum turn radius to switch between dual ackerman and spinning mode
     // Add a check to ensure radius is valid (not infinity or too large)
+    const double MIN_ANGULAR_VELOCITY_THRESHOLD = 0.01;  // rad/s
     if (std::isfinite(radius) && radius < robot_params_.min_turn_radius && 
-        std::abs(msg->angular.z) > 0.01) {
+        std::abs(msg->angular.z) > MIN_ANGULAR_VELOCITY_THRESHOLD) {
       motion_mode_ = MotionState::MOTION_MODE_SPINNING;
       robot_->SetMotionMode(MotionState::MOTION_MODE_SPINNING);
     } else {
@@ -421,20 +422,12 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     }
     case MotionState::MOTION_MODE_PARALLEL: {
       // Handle the case when linear.x is 0 to avoid divide-by-zero
-      if (std::abs(msg->linear.x) < 1e-6) {
+      const double MIN_LINEAR_X = 1e-6;
+      if (std::abs(msg->linear.x) < MIN_LINEAR_X) {
         // Pure lateral movement: steer angle is ±90 degrees
         steer_cmd = (msg->linear.y >= 0) ? M_PI / 2.0 : -M_PI / 2.0;
       } else {
         steer_cmd = atan(msg->linear.y / msg->linear.x);
-
-        if(std::signbit(msg->linear.x)&&msg->linear.x == 0.0)
-        {
-          steer_cmd = -steer_cmd;
-        }
-        else
-        {
-          steer_cmd = steer_cmd;
-        }
       }
 
       if (steer_cmd > robot_params_.max_steer_angle_parallel) {
@@ -445,9 +438,16 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
       }
       
       // Calculate velocity magnitude
-      double vel = msg->linear.x >= 0 ? 1.0 : -1.0;
-      double velocity_magnitude = vel * sqrt(msg->linear.x * msg->linear.x +
-                                          msg->linear.y * msg->linear.y);
+      double velocity_magnitude;
+      if (std::abs(msg->linear.x) < MIN_LINEAR_X) {
+        // For pure lateral movement, use absolute value of linear.y
+        velocity_magnitude = std::abs(msg->linear.y);
+      } else {
+        // For diagonal movement, calculate magnitude and preserve direction
+        double vel = msg->linear.x >= 0 ? 1.0 : -1.0;
+        velocity_magnitude = vel * sqrt(msg->linear.x * msg->linear.x +
+                                            msg->linear.y * msg->linear.y);
+      }
       
       // Clamp velocity to max_linear_speed
       if (std::abs(velocity_magnitude) > robot_params_.max_linear_speed) {
@@ -494,7 +494,8 @@ double RangerROSMessenger::CalculateSteeringAngle(geometry_msgs::msg::Twist msg,
   double angular = std::abs(msg.angular.z);
 
   // Avoid divide-by-zero and handle edge cases
-  if (angular < 1e-6) {
+  const double MIN_ANGULAR_VELOCITY = 1e-6;
+  if (angular < MIN_ANGULAR_VELOCITY) {
     // No rotation requested, set radius to infinity (straight line)
     radius = std::numeric_limits<double>::infinity();
     return 0.0;
@@ -505,14 +506,17 @@ double RangerROSMessenger::CalculateSteeringAngle(geometry_msgs::msg::Twist msg,
   
   // Cap angular velocity to prevent it from forcing unreasonably small turn radius
   // when linear velocity is low. This prevents forced mode switching to SPINNING.
-  double max_feasible_angular = linear / robot_params_.min_turn_radius;
-  if (angular > max_feasible_angular && linear > 0.01) {
-    // Scale down the angular velocity to maintain minimum turn radius
-    angular = max_feasible_angular;
-    radius = robot_params_.min_turn_radius;
+  const double MIN_LINEAR_VELOCITY = 0.01;  // Minimum linear velocity for capping (m/s)
+  if (robot_params_.min_turn_radius > 0 && linear > MIN_LINEAR_VELOCITY) {
+    double max_feasible_angular = linear / robot_params_.min_turn_radius;
+    if (angular > max_feasible_angular) {
+      // Scale down the angular velocity to maintain minimum turn radius
+      angular = max_feasible_angular;
+      radius = robot_params_.min_turn_radius;
+    }
   }
   
-  int k = (msg.angular.z * msg.linear.x) >= 0 ? 1.0 : -1.0;
+  double k = (msg.angular.z * msg.linear.x) >= 0 ? 1.0 : -1.0;
 
   double l, w, phi_i, x;
   l = robot_params_.wheelbase;
