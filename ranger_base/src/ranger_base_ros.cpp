@@ -56,7 +56,7 @@ bool RangerBaseRos::Initialize() {
   // if(port_name.find("can") != std::string::npos)
   if (detector.Connect(port_name_)) {
       std::cout << "Detected protocol: AGX_V2" << std::endl;
-      robot_ = std::make_shared<RangerRobot>(false);
+      robot_ = std::make_shared<RangerRobot>(RangerRobot::Variant::kRangerMiniV2);
       std::cout << "Creating interface for Ranger with AGX_V2 Protocol"
                   << std::endl;
 
@@ -81,7 +81,7 @@ void RangerBaseRos::Stop() { keep_running_ = false; }
 
 void RangerBaseRos::Run() {
 
-  robot_ = std::make_shared<RangerRobot>(false);
+  robot_ = std::make_shared<RangerRobot>(RangerRobot::Variant::kRangerMiniV2);
   // instantiate a ROS messenger
     std::unique_ptr<RangerMessenger<RangerRobot>> messenger =
         std::unique_ptr<RangerMessenger<RangerRobot>>(
