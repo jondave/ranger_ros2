@@ -393,8 +393,8 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     }
   } else {
     steer_cmd = CalculateSteeringAngle(*msg, radius);
-    // Use minimum turn radius to switch between dual ackerman and spinning mode
-    if (radius < robot_params_.min_turn_radius) {
+    // Only switch to spinning mode if linear velocity is negligible and we want to rotate
+    if (std::abs(msg->linear.x) < 0.001 && std::abs(msg->angular.z) > 0.001) {
       motion_mode_ = MotionState::MOTION_MODE_SPINNING;
       robot_->SetMotionMode(MotionState::MOTION_MODE_SPINNING);
     } else {
@@ -417,15 +417,19 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
       break;
     }
     case MotionState::MOTION_MODE_PARALLEL: {
-      steer_cmd = atan(msg->linear.y / msg->linear.x);
+      steer_cmd = std::atan2(msg->linear.y, msg->linear.x);
+      double vel_cmd = std::sqrt(msg->linear.x * msg->linear.x +
+                                 msg->linear.y * msg->linear.y);
 
-      if(std::signbit(msg->linear.x)&&msg->linear.x == 0.0)
-      {
-        steer_cmd = -steer_cmd;
-      }
-      else
-      {
-        steer_cmd = steer_cmd;
+      // Normalize steering angle to [-pi/2, pi/2] and flip velocity if needed
+      // This allows the robot to move in any direction (0-360 deg) using 
+      // standard steering limits (+/- 90 deg)
+      if (steer_cmd > M_PI / 2.0) {
+        steer_cmd -= M_PI;
+        vel_cmd = -vel_cmd;
+      } else if (steer_cmd < -M_PI / 2.0) {
+        steer_cmd += M_PI;
+        vel_cmd = -vel_cmd;
       }
 
       if (steer_cmd > robot_params_.max_steer_angle_parallel) {
@@ -434,10 +438,8 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
       if (steer_cmd < -robot_params_.max_steer_angle_parallel) {
         steer_cmd = -robot_params_.max_steer_angle_parallel;
       }
-      double vel = msg->linear.x >= 0 ? 1.0 : -1.0;
-      robot_->SetMotionCommand(vel * sqrt(msg->linear.x * msg->linear.x +
-                                          msg->linear.y * msg->linear.y),
-                               steer_cmd);
+      
+      robot_->SetMotionCommand(vel_cmd, steer_cmd);
       break;
     }
     case MotionState::MOTION_MODE_SPINNING: {
